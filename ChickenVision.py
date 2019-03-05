@@ -463,11 +463,12 @@ def findTape(contours, image, centerX, centerY):
                         continue
                 #Angle from center of camera to target (what you should pass into gyro)
                 yawToTarget = calculateYaw(centerOfTarget, centerX, H_FOCAL_LENGTH)
+                pitchToTarget = calculatePitch(centerOfTarget, centerY, V_FOCAL_LENGTH)
                 #Make sure no duplicates, then append
                 if not targets:
-                    targets.append([centerOfTarget, yawToTarget])
-                elif [centerOfTarget, yawToTarget] not in targets:
-                    targets.append([centerOfTarget, yawToTarget])
+                    targets.append([centerOfTarget, yawToTarget, pitchToTarget])
+                elif [centerOfTarget, yawToTarget, pitchToTarget] not in targets:
+                    targets.append([centerOfTarget, yawToTarget, pitchToTarget])
     #Check if there are targets seen
     if (len(targets) > 0):
         # pushes that it sees vision target to network tables
@@ -484,6 +485,7 @@ def findTape(contours, image, centerX, centerY):
         currentAngleError = finalTarget[1]
         # pushes vision target angle to network tables
         networkTable.putNumber("tapeYaw", currentAngleError)
+        networkTable.putNumber("tapePitch", finalTarget[2])
     else:
         # pushes that it deosn't see vision target to network tables
         networkTable.putBoolean("tapeDetected", False)
