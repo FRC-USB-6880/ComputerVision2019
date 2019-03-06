@@ -13,9 +13,11 @@ import cv2
 import numpy as np 
 import cmath as m
 import time
+from threading import Thread
 
 from cscore import CameraServer, VideoSource, UsbCamera, MjpegServer
 from networktables import NetworkTablesInstance
+from networktables import NetworkTables
 import ntcore
 
 #   JSON format:
@@ -64,8 +66,6 @@ def processImage(cap):
     
     r = (int(img.shape[1])/int(img.shape[0]))
     graysc = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    source.putFrame(graysc)
     
     ret, b = cv2.threshold(graysc, 100, 255, cv2.THRESH_BINARY)
 
@@ -85,7 +85,7 @@ def processImage(cap):
     centerX = int(img.shape[1])/2
     pDist = abs(cX-centerX)/int(img.shape[0])
 
-    angleOfView = 60
+    angleOfView = 68.5
     angleShift = int(angleOfView)*pDist
 
     dilateRGB = cv2.cvtColor(dilate, cv2.COLOR_GRAY2BGR)
@@ -97,8 +97,9 @@ def processImage(cap):
 
     magnitude = complex(10*17435/pixelArea)
 
-    a = m.sin(angleShift/57.3)
-    b = m.cos(angleShift/57.3)
+    y = m.sin(angleShift/57.3)
+    x = m.cos(angleShift/57.3)
+    return x, y
 
 configFile = "/boot/frc.json"
 
@@ -255,6 +256,68 @@ def startSwitchedCamera(config):
 
     return server
 
+class WebcamVideoStream:
+    def __init__(self, camera, cameraServer, frameWidth, frameHeight, name="WebcamVideoStream"):
+        # initialize the video camera stream and read the first frame
+        # from the stream
+
+        #Automatically sets exposure to 0 to track tape
+        self.webcam = camera
+        self.webcam.setExposureManual(0)
+        #Some booleans so that we don't keep setting exposure over and over to the same value
+        self.autoExpose = False
+        self.prevValue = self.autoExpose
+        #Make a blank image to write on
+        self.img = np.zeros(shape=(frameWidth, frameHeight, 3), dtype=np.uint8)
+        #Gets the video
+        self.stream = cameraServer.getVideo()
+        (self.timestamp, self.img) = self.stream.grabFrame(self.img)
+
+        # initialize the thread name
+        self.name = name
+
+        # initialize the variable used to indicate if the thread should
+        # be stopped
+        self.stopped = False
+
+    def start(self):
+        # start the thread to read frames from the video stream
+        t = Thread(target=self.update, name=self.name, args=())
+        t.daemon = True
+        t.start()
+        return self
+
+    def update(self):
+        # keep looping infinitely until the thread is stopped
+        while True:
+            # if the thread indicator variable is set, stop the thread
+            if self.stopped:
+                return
+            #Boolean logic we don't keep setting exposure over and over to the same value
+            if self.autoExpose:
+                if(self.autoExpose != self.prevValue):
+                    self.prevValue = self.autoExpose
+                    self.webcam.setExposureAuto()
+            else:
+                if (self.autoExpose != self.prevValue):
+                    self.prevValue = self.autoExpose
+                    self.webcam.setExposureManual(0)
+            #gets the image and timestamp from cameraserver
+            (self.timestamp, self.img) = self.stream.grabFrame(self.img)
+
+    def read(self):
+        # return the frame most recently read
+        return self.timestamp, self.img
+
+    def stop(self):
+        # indicate that the thread should be stopped
+        self.stopped = True
+    def getError(self):
+        return self.stream.getError()
+
+image_width = 256
+image_height = 144
+
 if __name__ == "__main__":
     if len(sys.argv) >= 2:
         configFile = sys.argv[1]
@@ -265,6 +328,9 @@ if __name__ == "__main__":
 
     # start NetworkTables
     ntinst = NetworkTablesInstance.getDefault()
+
+    networkTable = NetworkTables.getTable('HatchAlginment')
+
     if server:
         print("Setting up NetworkTables server")
         ntinst.startServer()
@@ -272,15 +338,23 @@ if __name__ == "__main__":
         print("Setting up NetworkTables client for team {}".format(team))
         ntinst.startClientTeam(team)
 
+    streams = []
     # start cameras
     for config in cameraConfigs:
-        cameras.append(startCamera(config))
+        cs, cameraCapture = startCamera(config)
+        streams.append(cs)
+        cameras.append(cameraCapture)
 
     # start switched cameras
     for config in switchedCameraConfigs:
         stream = startSwitchedCamera(config)
-
+    webcam = cameras[0]
+    cameraServer = streams[0]
+    cap = WebcamVideoStream(webcam, cameraServer, image_width, image_height).start()
     # loop forever
     while True:
-        webcam = cameras[0]
-        cap = WebcamVideoStream(webcam, stream, image_width, image_height).start()
+        x, y = processImage(cap)
+        networkTable.putNumber("X offset", x)
+        networkTable.putNumber("Y offset", y)
+        ntinst.flush()
+
